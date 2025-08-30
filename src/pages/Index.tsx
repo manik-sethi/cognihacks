@@ -2,7 +2,6 @@ import { useState, useEffect } from 'react';
 import { BCIStatus } from '../components/BCIStatus';
 import { ConfusionGraph } from '../components/ConfusionGraph';
 import { ChatBot } from '../components/ChatBot';
-import { HelpOverlay } from '../components/HelpOverlay';
 import { Brain, Zap, Activity } from 'lucide-react';
 
 const Index = () => {
@@ -133,7 +132,6 @@ const Index = () => {
       </main>
 
       {/* Help Overlay */}
-      {showHelp && <HelpOverlay onClose={() => setShowHelp(false)} />}
     </div>
   );
 };

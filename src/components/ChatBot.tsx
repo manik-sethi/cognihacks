@@ -4,6 +4,12 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { cn } from '@/lib/utils';
 
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
+import remarkMath from 'remark-math';
+import rehypeKatex from 'rehype-katex';
+import rehypeHighlight from 'rehype-highlight';
+
 interface Message {
   id: number;
   text: string;
@@ -193,15 +199,19 @@ export const ChatBot = ({ inline = false }: ChatBotProps) => {
             key={message.id}
             className={cn('flex', message.isBot ? 'justify-start' : 'justify-end')}
           >
-            <div
-              className={cn(
-                'max-w-[80%] p-3 rounded-lg text-sm whitespace-pre-wrap',
-                message.isBot
-                  ? 'bg-muted/50 text-foreground'
-                  : 'bg-primary text-primary-foreground'
-              )}
-            >
-              {message.text}
+            <div  
+                className={cn(
+                  'max-w-[80%] p-3 rounded-lg text-sm',
+                  message.isBot ? 'bg-muted/50 text-foreground'
+                                : 'bg-primary text-primary-foreground'
+                )}
+              >
+                <ReactMarkdown
+                  remarkPlugins={[remarkGfm, remarkMath]}
+                  rehypePlugins={[rehypeKatex, rehypeHighlight]}
+                >
+                  {message.text}
+                </ReactMarkdown>
             </div>
           </div>
         ))}
