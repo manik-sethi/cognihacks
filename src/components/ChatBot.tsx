@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { MessageCircle, Send, X, Bot } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import { MessageCircle, Send, X, Bot, Square } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { cn } from '@/lib/utils';
@@ -12,9 +12,7 @@ interface Message {
 }
 
 interface ChatBotProps {
-  /**
-   * When true, the chatbot renders as an inline panel instead of a floating widget.
-   */
+  /** When true, the chatbot renders as an inline panel instead of a floating widget. */
   inline?: boolean;
 }
 
@@ -29,52 +27,136 @@ export const ChatBot = ({ inline = false }: ChatBotProps) => {
     },
   ]);
   const [input, setInput] = useState('');
+  const [isStreaming, setIsStreaming] = useState(false);
+  const abortRef = useRef<AbortController | null>(null);
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const nextIdRef = useRef<number>(2);
 
-  const sendMessage = () => {
-    if (!input.trim()) return;
+  useEffect(() => {
+    // auto-scroll to bottom whenever messages change
+    const el = scrollRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [messages]);
+
+  const stopStreaming = () => {
+    abortRef.current?.abort();
+    abortRef.current = null;
+    setIsStreaming(false);
+  };
+
+  const sendMessage = async () => {
+    if (!input.trim() || isStreaming) return;
 
     const userMessage: Message = {
-      id: messages.length + 1,
+      id: nextIdRef.current++,
       text: input,
       isBot: false,
       timestamp: new Date(),
     };
 
-    setMessages(prev => [...prev, userMessage]);
+    // placeholder assistant message we will stream into
+    const assistantMessageId = nextIdRef.current++;
+    const assistantPlaceholder: Message = {
+      id: assistantMessageId,
+      text: '',
+      isBot: true,
+      timestamp: new Date(),
+    };
+
+    setMessages(prev => [...prev, userMessage, assistantPlaceholder]);
     setInput('');
 
-    // Simulate bot response
-    setTimeout(() => {
-      const botResponse: Message = {
-        id: messages.length + 2,
-        text: getBotResponse(input),
-        isBot: true,
-        timestamp: new Date(),
-      };
-      setMessages(prev => [...prev, botResponse]);
-    }, 1000);
-  };
+    // Build chat history for the model
+    const history = [
+      { role: 'system', content: 'You are a helpful learning assistant. Give gentle hints and explanations. Avoid giving full solutions unless explicitly asked.' },
+      ...messages.map(m => ({
+        role: m.isBot ? 'assistant' as const : 'user' as const,
+        content: m.text,
+      })),
+      { role: 'user' as const, content: userMessage.text },
+    ];
 
-  const getBotResponse = (userInput: string) => {
-    const input = userInput.toLowerCase();
+    // Stream from /api/chat (Vite middleware using OpenAI JS SDK)
+    try {
+      setIsStreaming(true);
+      const controller = new AbortController();
+      abortRef.current = controller;
 
-    if (input.includes('quadratic') || input.includes('formula')) {
-      return "The quadratic formula is a powerful tool! Remember, it's x = (-b ± √(b²-4ac)) / 2a. Try identifying your a, b, and c values first. What part are you finding challenging?";
+      const res = await fetch('/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: 'gpt-4o-mini',
+          messages: history,
+          temperature: 0.7,
+        }),
+        signal: controller.signal,
+      });
+
+      if (!res.ok || !res.body) {
+        setIsStreaming(false);
+        const errText = await res.text().catch(() => '');
+        throw new Error(errText || `Bad response: ${res.status}`);
+      }
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = '';
+      let acc = '';
+
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+
+        // Parse SSE frames: each event is "data: {...}\n\n"
+        const frames = buf.split('\n\n');
+        buf = frames.pop() ?? '';
+
+        for (const f of frames) {
+          if (!f.startsWith('data:')) continue;
+          const json = f.slice(5).trim();
+          if (!json) continue;
+
+          const evt = JSON.parse(json) as
+            | { type: 'token'; content: string }
+            | { type: 'done' }
+            | { type: 'error'; message: string };
+
+          if (evt.type === 'token') {
+            acc += evt.content;
+            // update the last assistant message with the accumulated text
+            setMessages(prev => {
+              const copy = [...prev];
+              const idx = copy.findIndex(m => m.id === assistantMessageId);
+              if (idx !== -1) {
+                copy[idx] = { ...copy[idx], text: acc };
+              }
+              return copy;
+            });
+          } else if (evt.type === 'error') {
+            throw new Error(evt.message);
+          } else if (evt.type === 'done') {
+            // stream finished
+            setIsStreaming(false);
+          }
+        }
+      }
+    } catch (err: any) {
+      setIsStreaming(false);
+      // Show a simple error bubble
+      setMessages(prev => [
+        ...prev,
+        {
+          id: nextIdRef.current++,
+          text: `Error: ${err?.message || String(err)}`,
+          isBot: true,
+          timestamp: new Date(),
+        },
+      ]);
+    } finally {
+      abortRef.current = null;
     }
-
-    if (input.includes('derivative') || input.includes('differentiate')) {
-      return 'For derivatives, start with the power rule: bring down the exponent and reduce it by 1. For example, x³ becomes 3x². What function are you trying to differentiate?';
-    }
-
-    if (input.includes('limit') || input.includes('infinity')) {
-      return "When dealing with limits at infinity, focus on the highest power terms in both numerator and denominator. They often determine the behavior. What's your specific limit problem?";
-    }
-
-    if (input.includes('confused') || input.includes('stuck')) {
-      return "I can see your confusion levels are elevated. Let's break this down step by step. What specific part of the problem is causing difficulty? I can guide you through the process.";
-    }
-
-    return "I'm here to help guide your thinking! Can you tell me more about what specific concept or step you're working on? I'll provide hints without giving away the solution.";
   };
 
   const chatContent = (
@@ -87,33 +169,33 @@ export const ChatBot = ({ inline = false }: ChatBotProps) => {
           </div>
           <div>
             <h4 className="font-medium">AI Assistant</h4>
-            <p className="text-xs text-muted-foreground">Online</p>
+            <p className="text-xs text-muted-foreground">{isStreaming ? 'Streaming' : 'Online'}</p>
           </div>
         </div>
-        {!inline && (
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => setIsOpen(false)}
-          >
-            <X className="w-4 h-4" />
-          </Button>
-        )}
+        <div className="flex items-center gap-2">
+          {isStreaming && (
+            <Button variant="ghost" size="sm" onClick={stopStreaming} title="Stop">
+              <Square className="w-4 h-4" />
+            </Button>
+          )}
+          {!inline && (
+            <Button variant="ghost" size="sm" onClick={() => { stopStreaming(); setIsOpen(false); }}>
+              <X className="w-4 h-4" />
+            </Button>
+          )}
+        </div>
       </div>
 
       {/* Messages */}
-      <div className="flex-1 overflow-y-auto p-4 space-y-3">
+      <div ref={scrollRef} className="flex-1 overflow-y-auto p-4 space-y-3">
         {messages.map(message => (
           <div
             key={message.id}
-            className={cn(
-              'flex',
-              message.isBot ? 'justify-start' : 'justify-end'
-            )}
+            className={cn('flex', message.isBot ? 'justify-start' : 'justify-end')}
           >
             <div
               className={cn(
-                'max-w-[80%] p-3 rounded-lg text-sm',
+                'max-w-[80%] p-3 rounded-lg text-sm whitespace-pre-wrap',
                 message.isBot
                   ? 'bg-muted/50 text-foreground'
                   : 'bg-primary text-primary-foreground'
@@ -132,10 +214,16 @@ export const ChatBot = ({ inline = false }: ChatBotProps) => {
             value={input}
             onChange={e => setInput(e.target.value)}
             placeholder="Ask for help..."
-            onKeyPress={e => e.key === 'Enter' && sendMessage()}
+            onKeyDown={e => {
+              if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                sendMessage();
+              }
+            }}
             className="flex-1"
+            disabled={isStreaming}
           />
-          <Button onClick={sendMessage} size="sm">
+          <Button onClick={sendMessage} size="sm" disabled={isStreaming || !input.trim()}>
             <Send className="w-4 h-4" />
           </Button>
         </div>
@@ -157,6 +245,7 @@ export const ChatBot = ({ inline = false }: ChatBotProps) => {
         onClick={() => setIsOpen(true)}
         className="fixed bottom-6 right-6 w-14 h-14 rounded-full glow-primary neural-pulse"
         size="lg"
+        title="Open chat"
       >
         <MessageCircle className="w-6 h-6" />
       </Button>
