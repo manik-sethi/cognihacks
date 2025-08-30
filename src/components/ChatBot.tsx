@@ -187,7 +187,7 @@ export const ChatBot = ({ inline = false }: ChatBotProps) => {
       </div>
 
       {/* Messages */}
-      <div ref={scrollRef} className="flex-1 overflow-y-auto p-4 space-y-3">
+      <div ref={scrollRef} className="flex-1 min-h-0 overflow-y-auto p-4 space-y-3">
         {messages.map(message => (
           <div
             key={message.id}
@@ -233,7 +233,9 @@ export const ChatBot = ({ inline = false }: ChatBotProps) => {
 
   if (inline) {
     return (
-      <div className="glass-card rounded-xl border border-border/50 flex flex-col h-full">
+      <div className="glass-card rounded-xl border border-border/50 
+                      flex flex-col min-h-0 overflow-hidden
+                      h-[70vh] max-h-[85vh]">
         {chatContent}
       </div>
     );
@@ -253,7 +255,9 @@ export const ChatBot = ({ inline = false }: ChatBotProps) => {
   }
 
   return (
-    <div className="fixed bottom-6 right-6 w-80 h-96 glass-card rounded-xl border border-border/50 flex flex-col">
+    <div className="fixed bottom-6 right-6 w-80 h-96 glass-card
+                rounded-xl border border-border/50 flex flex-col
+                min-h-0 overflow-hidden">
       {chatContent}
     </div>
   );
