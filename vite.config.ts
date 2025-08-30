@@ -1,3 +1,4 @@
+// vite.config.ts
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react-swc";
 import path from "path";
@@ -5,8 +6,11 @@ import { componentTagger } from "lovable-tagger";
 import OpenAI from "openai";
 import "dotenv/config";
 
-// Inline handler so you don't need a separate server file.
-// Streams SSE frames: data: {"type":"token","content":"..."}\n\n
+/**
+ * Inline backend for dev/preview.
+ * Mounts /api/chat and streams SSE frames:
+ *   data: {"type":"token","content":"..."}\n\n
+ */
 function openaiChatStreamPlugin() {
   return {
     name: "openai-chat-stream",
@@ -20,9 +24,7 @@ function openaiChatStreamPlugin() {
 }
 
 function createHandler() {
-  const client = new OpenAI({
-    apiKey: process.env.OPENAI_API_KEY!,
-  });
+  const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY! });
 
   return async (req: any, res: any) => {
     if (req.method !== "POST") {
@@ -31,61 +33,95 @@ function createHandler() {
     }
 
     try {
-      // read JSON body
+      // 1) Read JSON body
       const chunks: Buffer[] = [];
       for await (const c of req) chunks.push(c as Buffer);
-      const { model, messages, temperature, max_tokens } = JSON.parse(
-        Buffer.concat(chunks).toString("utf8")
-      );
+      const body = JSON.parse(Buffer.concat(chunks).toString("utf8"));
 
-      // SSE headers
+      const {
+        // Single source of truth: default model here
+        model = "gpt-4o",
+        messages = [],      // may include a system message
+        images = [],        // full data URLs: data:image/...;base64,....
+        temperature,
+        max_tokens,
+      } = body || {};
+
+      // 2) SSE headers
       res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
       res.setHeader("Cache-Control", "no-cache");
       res.setHeader("Connection", "keep-alive");
 
-      // Stream via OpenAI Responses API
-      // Event types include: response.output_text.delta, response.completed, etc.
-      const stream = await client.responses.stream({
-        model,
-        input: messages, // you can pass a string or your chat array
-        temperature,
-        max_output_tokens: max_tokens ?? undefined,
+      // 3) Build Chat Completions messages
+      const sys = messages.find?.((m: any) => m.role === "system");
+      const systemMessage =
+        sys ??
+        ({
+          role: "system",
+          content:
+            "You are a tutoring assistant. Use Markdown. If an image is provided, first describe what is on the screen (UI, text, warnings), then give targeted, step-by-step help.",
+        } as const);
+
+      const userMessage = {
+        role: "user" as const,
+        content: [
+          {
+            type: "text" as const,
+            text:
+              "Analyze the attached screenshot. Describe what you see, then give concrete, tutoring-style guidance.",
+          },
+          ...images.map((dataUrl: string) => ({
+            type: "image_url" as const,
+            image_url: { url: dataUrl, detail: "high" as const },
+          })),
+        ],
+      };
+
+      const formatted = [systemMessage, userMessage];
+
+      console.log("[/api/chat] Calling Chat Completions", {
+        modelUsed: model,
+        hasImage: userMessage.content.some((p) => p.type === "image_url"),
+        parts: userMessage.content.length,
+        imageHead: images[0]?.slice?.(0, 32),
       });
 
-      for await (const event of stream) {
-        if (event.type === "response.output_text.delta") {
-          res.write(
-            `data: ${JSON.stringify({ type: "token", content: event.delta })}\n\n`
-          );
-        } else if (event.type === "response.completed") {
+      // 4) Stream Chat Completions
+      const stream = await client.chat.completions.create({
+        model,
+        messages: formatted,
+        temperature,
+        max_tokens: max_tokens ?? undefined,
+        stream: true,
+      });
+
+      for await (const chunk of stream) {
+        const content = chunk.choices[0]?.delta?.content;
+        if (content) res.write(`data: ${JSON.stringify({ type: "token", content })}\n\n`);
+        const finish = chunk.choices[0]?.finish_reason;
+        if (finish) {
           res.write(`data: {"type":"done"}\n\n`);
           res.end();
           return;
         }
-        // ignore other event types for brevity
       }
 
       // Fallback end
       res.write(`data: {"type":"done"}\n\n`);
       res.end();
     } catch (err: any) {
+      console.error("[/api/chat] Error:", err?.message);
       res.statusCode = 400;
       res.end(String(err?.message || err));
     }
   };
 }
 
-// https://vitejs.dev/config/
 export default defineConfig(({ mode }) => ({
-  server: {
-    host: "::",
-    port: 8080,
-  },
-  plugins: [
-    react(),
-    mode === "development" && componentTagger(),
-    openaiChatStreamPlugin(),
-  ].filter(Boolean),
+  server: { host: "::", port: 8080 },
+  plugins: [react(), mode === "development" && componentTagger(), openaiChatStreamPlugin()].filter(
+    Boolean
+  ),
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),
