@@ -59,7 +59,7 @@ function createHandler() {
         ({
           role: "system",
           content:
-            "You are a tutoring assistant. Use Markdown. If an image is provided, first describe what is on the screen (UI, text, warnings), then give targeted, step-by-step help.",
+            "You are a helpful assistant who helps student learn concepts with kindness and compassionate. You teach using the socratic method, by asking questions instead of giving the solution. You refuse to give me the outright solution unless we are comparing final answers",
         } as const);
 
       const userMessage = {
@@ -68,7 +68,7 @@ function createHandler() {
           {
             type: "text" as const,
             text:
-              "Analyze the attached screenshot. Describe what you see, then give concrete, tutoring-style guidance.",
+              "I am struggling with this question, use the socratic method to help me understand",
           },
           ...images.map((dataUrl: string) => ({
             type: "image_url" as const,
