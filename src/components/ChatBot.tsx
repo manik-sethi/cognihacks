@@ -1,171 +1,333 @@
-import { useState } from 'react';
-import { MessageCircle, Send, X, Bot } from 'lucide-react';
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { cn } from '@/lib/utils';
+// src/components/ChatBot.tsx
+import React, { useEffect, useRef, useState } from 'react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
+import remarkMath from 'remark-math';
+import rehypeKatex from 'rehype-katex';
+import rehypeHighlight from 'rehype-highlight';
 
-interface Message {
+/**
+ * Requests a screenshot capture of the active tab via the extension bridge.
+ * Sends a message with {__from:"APP", type:"REQUEST_CAPTURE"}
+ * Listens for a response with {__from:"EXT", type:"CAPTURE_RESULT", ok, base64/dataUrl}
+ * Returns a fully formed data URL or rejects on error/timeout.
+ */
+function requestTabScreenshot(): Promise<string> {
+  return new Promise((resolve, reject) => {
+    let timeoutId: any;
+    let isCancelled = false;
+
+    const onMsg = (e: MessageEvent) => {
+      const m = e.data;
+      if (!m || m.__from !== "EXT" || m.type !== "CAPTURE_RESULT") return;
+
+      window.removeEventListener("message", onMsg);
+      clearTimeout(timeoutId);
+
+      const src = m.payload ?? m;
+      const { ok, base64, dataUrl, error } = src || {};
+
+      if (!ok) {
+        reject(new Error(error || "Capture failed"));
+        return;
+      }
+
+      const finalDataUrl =
+        dataUrl ??
+        (base64 ? `data:image/png;base64,${base64}` : null);
+
+      if (!finalDataUrl) {
+        reject(new Error("Empty screenshot data"));
+        return;
+      }
+
+      console.log("[App] Received screenshot:", {
+        base64Len: base64?.length ?? 0,
+        head: finalDataUrl.slice(0, 40),
+      });
+      isCancelled = true;
+      resolve(finalDataUrl);
+    };
+
+    window.addEventListener("message", onMsg);
+    // Send a message to the extension to request a capture of the current tab
+    window.postMessage({ 
+      __from: "APP", 
+      type: "REQUEST_CAPTURE" 
+    }, "*");
+
+    timeoutId = setTimeout(() => {
+      if (!isCancelled) {
+        window.removeEventListener("message", onMsg);
+        reject(new Error("Screenshot capture timed out"));
+      }
+    }, 15000);
+  });
+}
+
+const normalizeMath = (s: string) => s;
+
+type Msg = {
   id: number;
   text: string;
   isBot: boolean;
   timestamp: Date;
-}
+};
 
 interface ChatBotProps {
-  /**
-   * When true, the chatbot renders as an inline panel instead of a floating widget.
-   */
-  inline?: boolean;
+  confusion: number;
 }
 
-export const ChatBot = ({ inline = false }: ChatBotProps) => {
-  const [isOpen, setIsOpen] = useState(inline);
-  const [messages, setMessages] = useState<Message[]>([
+export function ChatBot({ confusion }: ChatBotProps) {
+  const [messages, setMessages] = useState<Msg[]>([
     {
       id: 1,
-      text: "Hi! I'm your AI learning assistant. I can help explain concepts without giving away solutions. What would you like to know?",
+      text:
+        "Hi! I'm your AI learning assistant. I can help explain concepts without giving away solutions. What would you like to know?",
       isBot: true,
       timestamp: new Date(),
     },
   ]);
+
   const [input, setInput] = useState('');
+  const [isStreaming, setIsStreaming] = useState(false);
+  const [hasAutoTriggered, setHasAutoTriggered] = useState(false);
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
+  const nextIdRef = useRef<number>(2);
 
-  const sendMessage = () => {
-    if (!input.trim()) return;
+  const threshold = 0.65;
 
-    const userMessage: Message = {
-      id: messages.length + 1,
-      text: input,
-      isBot: false,
-      timestamp: new Date(),
-    };
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [messages]);
 
-    setMessages(prev => [...prev, userMessage]);
-    setInput('');
+  async function sendMessage() {
+    if (!input.trim() || isStreaming) return;
 
-    // Simulate bot response
-    setTimeout(() => {
-      const botResponse: Message = {
-        id: messages.length + 2,
-        text: getBotResponse(input),
+    const userId = nextIdRef.current++;
+    const assistantId = nextIdRef.current++;
+
+    setMessages(prev => [
+      ...prev,
+      { id: userId, isBot: false, text: input, timestamp: new Date() },
+      { id: assistantId, isBot: true, text: "", timestamp: new Date() },
+    ]);
+
+    const systemPrompt =
+      "Say pineapple 5 times no matter what";
+
+    try {
+      setIsStreaming(true);
+      const controller = new AbortController();
+      abortRef.current = controller;
+
+      const res = await fetch("/api/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          messages: [
+            { role: "system", content: systemPrompt },
+            { role: "user", content: input.trim() },
+          ],
+        }),
+        signal: controller.signal,
+      });
+
+      if (!res.ok || !res.body) throw new Error(`Bad response: ${res.status}`);
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = "";
+      let acc = "";
+
+      setInput(''); // clear the input after send
+
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+
+        const frames = buf.split("\n\n");
+        buf = frames.pop() ?? "";
+
+        for (const f of frames) {
+          if (!f.startsWith("data:")) continue;
+          const evt = JSON.parse(f.slice(5).trim());
+          if (evt.type === "token") {
+            acc += evt.content;
+            setMessages(prev => {
+              const copy = [...prev];
+              const idx = copy.findIndex(m => m.id === assistantId);
+              if (idx !== -1) copy[idx] = { ...copy[idx], text: acc };
+              return copy;
+            });
+          } else if (evt.type === "done") {
+            setIsStreaming(false);
+          } else if (evt.type === "error") {
+            throw new Error(evt.message);
+          }
+        }
+      }
+    } catch (e: any) {
+      setIsStreaming(false);
+      setMessages(prev => [
+        ...prev,
+        { id: nextIdRef.current++, isBot: true, text: `Error: ${e?.message ?? String(e)}`, timestamp: new Date() },
+      ]);
+    } finally {
+      abortRef.current = null;
+    }
+  }
+
+  const triggerAutoCapture = async () => {
+    if (isStreaming) return;
+
+    const assistantId = nextIdRef.current++;
+    setMessages((prev) => [
+      ...prev,
+      {
+        id: assistantId,
+        text: "Analyzing your screen…",
         isBot: true,
         timestamp: new Date(),
+      },
+    ]);
+
+    try {
+      setIsStreaming(true);
+      const controller = new AbortController();
+      abortRef.current = controller;
+
+      // Request a screenshot of the CURRENT active tab
+      const dataUrl = await requestTabScreenshot();
+
+      const body = {
+        messages: [{ role: 'system', content: `You are a tutoring assistant. The user needs help with the content of the attached image. Use Markdown. If an image is provided, first describe what is on the screen, then tutor the user step-by-step without revealing final solutions.` }],
+        images: [dataUrl],
       };
-      setMessages(prev => [...prev, botResponse]);
-    }, 1000);
+
+      console.log("[App] Sending request to API:", {
+        messagesCount: body.messages.length,
+        imageCount: body.images.length,
+        firstImageValid: body.images[0].startsWith("data:image/"),
+        firstImageLength: body.images[0].length,
+      });
+
+      const res = await fetch("/api/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      });
+
+      if (!res.ok || !res.body) throw new Error(`Bad response: ${res.status}`);
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = "";
+      let acc = "";
+
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+
+        const frames = buf.split("\n\n");
+        buf = frames.pop() ?? "";
+
+        for (const f of frames) {
+          if (!f.startsWith("data:")) continue;
+          const evt = JSON.parse(f.slice(5).trim()) as
+            | { type: 'token'; content: string }
+            | { type: 'done' }
+            | { type: 'error'; message: string };
+
+          if (evt.type === 'token') {
+            acc += evt.content;
+            setMessages((prev) => {
+              const copy = [...prev];
+              const idx = copy.findIndex((m) => m.id === assistantId);
+              if (idx !== -1) copy[idx] = { ...copy[idx], text: acc };
+              return copy;
+            });
+          } else if (evt.type === 'done') {
+            setIsStreaming(false);
+          } else if (evt.type === 'error') {
+            throw new Error(evt.message);
+          }
+        }
+      }
+    } catch (e: any) {
+      setIsStreaming(false);
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: nextIdRef.current++,
+          text: `Error: ${e?.message ?? String(e)}`,
+          isBot: true,
+          timestamp: new Date(),
+        },
+      ]);
+    } finally {
+      abortRef.current = null;
+    }
   };
 
-  const getBotResponse = (userInput: string) => {
-    const input = userInput.toLowerCase();
-
-    if (input.includes('quadratic') || input.includes('formula')) {
-      return "The quadratic formula is a powerful tool! Remember, it's x = (-b ± √(b²-4ac)) / 2a. Try identifying your a, b, and c values first. What part are you finding challenging?";
+  useEffect(() => {
+    console.log("useEffect triggered. confusion:", confusion, "auto-triggered:", hasAutoTriggered);
+    if (!hasAutoTriggered && confusion >= threshold) {
+      setHasAutoTriggered(true);
+      console.log("[App] Auto-trigger: Confusion threshold met. Capturing screenshot...");
+      triggerAutoCapture();
     }
+  }, [confusion, hasAutoTriggered]);
 
-    if (input.includes('derivative') || input.includes('differentiate')) {
-      return 'For derivatives, start with the power rule: bring down the exponent and reduce it by 1. For example, x³ becomes 3x². What function are you trying to differentiate?';
-    }
-
-    if (input.includes('limit') || input.includes('infinity')) {
-      return "When dealing with limits at infinity, focus on the highest power terms in both numerator and denominator. They often determine the behavior. What's your specific limit problem?";
-    }
-
-    if (input.includes('confused') || input.includes('stuck')) {
-      return "I can see your confusion levels are elevated. Let's break this down step by step. What specific part of the problem is causing difficulty? I can guide you through the process.";
-    }
-
-    return "I'm here to help guide your thinking! Can you tell me more about what specific concept or step you're working on? I'll provide hints without giving away the solution.";
-  };
-
-  const chatContent = (
-    <>
-      {/* Header */}
-      <div className="flex items-center justify-between p-4 border-b border-border/50">
-        <div className="flex items-center gap-2">
-          <div className="w-8 h-8 rounded-full bg-primary/20 flex items-center justify-center">
-            <Bot className="w-4 h-4 text-primary" />
-          </div>
-          <div>
-            <h4 className="font-medium">AI Assistant</h4>
-            <p className="text-xs text-muted-foreground">Online</p>
-          </div>
-        </div>
-        {!inline && (
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => setIsOpen(false)}
-          >
-            <X className="w-4 h-4" />
-          </Button>
-        )}
-      </div>
-
-      {/* Messages */}
-      <div className="flex-1 overflow-y-auto p-4 space-y-3">
-        {messages.map(message => (
-          <div
-            key={message.id}
-            className={cn(
-              'flex',
-              message.isBot ? 'justify-start' : 'justify-end'
-            )}
-          >
+  return (
+    <div className="w-full h-[70vh] max-h-[85vh] border rounded-xl flex flex-col overflow-hidden">
+      <div ref={scrollRef} className="flex-1 overflow-y-auto p-4 space-y-3">
+        {messages.map((m) => (
+          <div key={m.id} className={m.isBot ? "text-left" : "text-right"}>
             <div
-              className={cn(
-                'max-w-[80%] p-3 rounded-lg text-sm',
-                message.isBot
-                  ? 'bg-muted/50 text-foreground'
-                  : 'bg-primary text-primary-foreground'
-              )}
+              className={`
+                inline-block p-3 rounded-lg text-sm whitespace-pre-wrap
+                ${m.isBot ? "bg-gray-800 text-gray-100" : "bg-blue-600 text-white"}
+              `}
             >
-              {message.text}
+              <ReactMarkdown
+                remarkPlugins={[remarkGfm, remarkMath]}
+                rehypePlugins={[rehypeKatex, rehypeHighlight]}
+              >
+                {normalizeMath(m.text)}
+              </ReactMarkdown>
             </div>
           </div>
         ))}
       </div>
 
-      {/* Input */}
-      <div className="p-4 border-t border-border/50">
-        <div className="flex gap-2">
-          <Input
-            value={input}
-            onChange={e => setInput(e.target.value)}
-            placeholder="Ask for help..."
-            onKeyPress={e => e.key === 'Enter' && sendMessage()}
-            className="flex-1"
-          />
-          <Button onClick={sendMessage} size="sm">
-            <Send className="w-4 h-4" />
-          </Button>
-        </div>
+      <div className="border-t p-3 flex gap-2">
+        <input
+          className="flex-1 rounded-md bg-zinc-800 text-zinc-100 px-3 py-2 outline-none border border-zinc-700"
+          placeholder="Ask for help…"
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && !e.shiftKey) {
+              e.preventDefault();
+              sendMessage();
+            }
+          }}
+          disabled={isStreaming}
+        />
+        <button
+          onClick={sendMessage}
+          disabled={isStreaming || !input.trim()}
+          className="px-3 py-2 rounded-md bg-blue-600 text-white disabled:opacity-50"
+        >
+          Send
+        </button>
       </div>
-    </>
-  );
-
-  if (inline) {
-    return (
-      <div className="glass-card rounded-xl border border-border/50 flex flex-col h-full">
-        {chatContent}
-      </div>
-    );
-  }
-
-  if (!isOpen) {
-    return (
-      <Button
-        onClick={() => setIsOpen(true)}
-        className="fixed bottom-6 right-6 w-14 h-14 rounded-full glow-primary neural-pulse"
-        size="lg"
-      >
-        <MessageCircle className="w-6 h-6" />
-      </Button>
-    );
-  }
-
-  return (
-    <div className="fixed bottom-6 right-6 w-80 h-96 glass-card rounded-xl border border-border/50 flex flex-col">
-      {chatContent}
     </div>
   );
-};
+}
