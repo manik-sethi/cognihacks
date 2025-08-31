@@ -9,25 +9,24 @@ const Index = () => {
   const [isConnected, setIsConnected] = useState(true);
   const [showHelp, setShowHelp] = useState(false);
 
-  // Simulate real-time confusion level updates
   useEffect(() => {
-    const interval = setInterval(() => {
-      setConfusionLevel(prev => {
-        const change = (Math.random() - 0.5) * 20;
-        const newLevel = Math.max(0, Math.min(100, prev + change));
-        
-        // Trigger help when confusion is high
-        if (newLevel > 75 && !showHelp) {
-          setShowHelp(true);
-          setTimeout(() => setShowHelp(false), 5000);
-        }
-        
-        return newLevel;
-      });
-    }, 1000);
+    const fetchConfusion = async () => {
+      try {
+        const res = await fetch("http://localhost:8000/confusion");
+        const data = await res.json();
+        console.log("Fetched confusion level:", data.confusionLevel); // 👈 Add this
+        const level = Number(data.confusionLevel);
+        setConfusionLevel(isNaN(level) ? 0 : level);
+      } catch (err) {
+        console.error("Failed to fetch confusion level:", err);
+        setConfusionLevel(0);
+      }
+    };
 
+    const interval = setInterval(fetchConfusion, 2000);
+    fetchConfusion(); // initial call
     return () => clearInterval(interval);
-  }, [showHelp]);
+  }, []);
 
   return (
     <div className="min-h-screen bg-background text-foreground relative overflow-hidden">
