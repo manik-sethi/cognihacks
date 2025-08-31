@@ -1,7 +1,9 @@
 # CogniLearn - A neuro-aware screenshot tutor
 Cognilearn is an AI tutor that uses BCI technology to automatically detect when you are confused. Once confusion is detected, CogniLearn screenshots the problem you are on, understands it, and then offers gentle guidance on our UI.
 
+![UI](https://github.com/manik-sethi/cognihacks/blob/main/cognilearn1.png)
 
+![UI](https://github.com/manik-sethi/cognihacks/blob/main/cognilearn2.png)
 
 ## 🧰 How we built it:
 Here's how we built the project
