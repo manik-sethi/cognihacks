@@ -7,13 +7,15 @@ import rehypeKatex from 'rehype-katex';
 import rehypeHighlight from 'rehype-highlight';
 
 /**
- * Requests a screenshot capture via the extension bridge.
- * Listens for a message with {__from:"EXT", type:"CAPTURE_RESULT", ok, base64/dataUrl}
+ * Requests a screenshot capture of the active tab via the extension bridge.
+ * Sends a message with {__from:"APP", type:"REQUEST_CAPTURE"}
+ * Listens for a response with {__from:"EXT", type:"CAPTURE_RESULT", ok, base64/dataUrl}
  * Returns a fully formed data URL or rejects on error/timeout.
  */
 function requestTabScreenshot(): Promise<string> {
   return new Promise((resolve, reject) => {
     let timeoutId: any;
+    let isCancelled = false;
 
     const onMsg = (e: MessageEvent) => {
       const m = e.data;
@@ -43,20 +45,27 @@ function requestTabScreenshot(): Promise<string> {
         base64Len: base64?.length ?? 0,
         head: finalDataUrl.slice(0, 40),
       });
+      isCancelled = true;
       resolve(finalDataUrl);
     };
 
     window.addEventListener("message", onMsg);
-    window.postMessage({ __from: "APP", type: "REQUEST_CAPTURE" }, "*");
+    // Send a message to the extension to request a capture of the current tab
+    window.postMessage({ 
+      __from: "APP", 
+      type: "REQUEST_CAPTURE" 
+    }, "*");
 
     timeoutId = setTimeout(() => {
-      window.removeEventListener("message", onMsg);
-      reject(new Error("Screenshot capture timed out"));
+      if (!isCancelled) {
+        window.removeEventListener("message", onMsg);
+        reject(new Error("Screenshot capture timed out"));
+      }
     }, 15000);
   });
 }
 
-const normalizeMath = (s: string) => s; // extend if needed
+const normalizeMath = (s: string) => s;
 
 type Msg = {
   id: number;
@@ -65,7 +74,11 @@ type Msg = {
   timestamp: Date;
 };
 
-export function ChatBot() {
+interface ChatBotProps {
+  confusion: number;
+}
+
+export function ChatBot({ confusion }: ChatBotProps) {
   const [messages, setMessages] = useState<Msg[]>([
     {
       id: 1,
@@ -76,19 +89,21 @@ export function ChatBot() {
     },
   ]);
 
-  const [input, setInput] = useState('');           // <-- added
+  const [input, setInput] = useState('');
   const [isStreaming, setIsStreaming] = useState(false);
   const [hasAutoTriggered, setHasAutoTriggered] = useState(false);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const nextIdRef = useRef<number>(2);
 
+  const threshold = 0.65;
+
   useEffect(() => {
     const el = scrollRef.current;
     if (el) el.scrollTop = el.scrollHeight;
   }, [messages]);
 
-  async function sendMessage() {                     // <-- added
+  async function sendMessage() {
     if (!input.trim() || isStreaming) return;
 
     const userId = nextIdRef.current++;
@@ -116,7 +131,6 @@ export function ChatBot() {
             { role: "system", content: systemPrompt },
             { role: "user", content: input.trim() },
           ],
-          // no images for manual text messages
         }),
         signal: controller.signal,
       });
@@ -170,9 +184,6 @@ export function ChatBot() {
   const triggerAutoCapture = async () => {
     if (isStreaming) return;
 
-    const systemPrompt =
-      "You are a tutoring assistant. Use Markdown. If an image is provided, first describe what is on the screen, then tutor the user step-by-step without revealing final solutions.";
-
     const assistantId = nextIdRef.current++;
     setMessages((prev) => [
       ...prev,
@@ -189,10 +200,11 @@ export function ChatBot() {
       const controller = new AbortController();
       abortRef.current = controller;
 
+      // Request a screenshot of the CURRENT active tab
       const dataUrl = await requestTabScreenshot();
 
       const body = {
-        messages: [{ role: 'system', content: systemPrompt }],
+        messages: [{ role: 'system', content: `You are a tutoring assistant. The user needs help with the content of the attached image. Use Markdown. If an image is provided, first describe what is on the screen, then tutor the user step-by-step without revealing final solutions.` }],
         images: [dataUrl],
       };
 
@@ -263,17 +275,14 @@ export function ChatBot() {
     }
   };
 
-  // Auto-trigger example
   useEffect(() => {
-    const confusion = 0.5;
-    const threshold = 0.3;
     console.log("useEffect triggered. confusion:", confusion, "auto-triggered:", hasAutoTriggered);
     if (!hasAutoTriggered && confusion >= threshold) {
       setHasAutoTriggered(true);
       console.log("[App] Auto-trigger: Confusion threshold met. Capturing screenshot...");
       triggerAutoCapture();
     }
-  }, [hasAutoTriggered]);
+  }, [confusion, hasAutoTriggered]);
 
   return (
     <div className="w-full h-[70vh] max-h-[85vh] border rounded-xl flex flex-col overflow-hidden">
@@ -297,7 +306,6 @@ export function ChatBot() {
         ))}
       </div>
 
-      {/* input bar (manual text messages) */}
       <div className="border-t p-3 flex gap-2">
         <input
           className="flex-1 rounded-md bg-zinc-800 text-zinc-100 px-3 py-2 outline-none border border-zinc-700"

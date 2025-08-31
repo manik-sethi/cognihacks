@@ -37,9 +37,25 @@ def stream_confusion():
         time.sleep(sleep)
 
 def simulate_confusion():
+    set_confusion_level(0)
+    sleep = 1 # Assuming a value for sleep
     while True:
-        set_confusion_level(random.randint(20, 80))
-        print("Simulated confusion level:", confusion_level)
+        # Check the current confusion level
+        current_level = get_confusion_level()
+        
+        if current_level > 80:
+            # If the value is above 80, it oscillates with a value of 3
+            # It will add or subtract a random number between -3 and 3
+            oscillation = random.randint(-3, 3)
+            set_confusion_level(current_level + oscillation)
+        elif current_level <= 75:
+            # If the value is 75 or below, it increases by 5
+            set_confusion_level(current_level + 5)
+        else:
+            # This handles the case where the value is between 76 and 80.
+            # It will continue to increase by 5 until it goes above 80.
+            set_confusion_level(current_level + 5)
+
         time.sleep(sleep)
 
 # === Startup - Actual Function Calls ===

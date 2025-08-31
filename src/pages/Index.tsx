@@ -5,7 +5,7 @@ import { ChatBot } from '../components/ChatBot';
 import { Brain, Zap, Activity } from 'lucide-react';
 
 const Index = () => {
-  const [confusionLevel, setConfusionLevel] = useState(20);
+  const [confusionLevel, setConfusionLevel] = useState(0);
   const [isConnected, setIsConnected] = useState(true);
   const [showHelp, setShowHelp] = useState(false);
 
@@ -14,7 +14,7 @@ const Index = () => {
       try {
         const res = await fetch("http://localhost:8000/confusion");
         const data = await res.json();
-        console.log("Fetched confusion level:", data.confusionLevel); // 👈 Add this
+        console.log("Fetched confusion level:", data.confusionLevel); 
         const level = Number(data.confusionLevel);
         setConfusionLevel(isNaN(level) ? 0 : level);
       } catch (err) {
@@ -24,7 +24,7 @@ const Index = () => {
     };
 
     const interval = setInterval(fetchConfusion, 2000);
-    fetchConfusion(); // initial call
+    fetchConfusion();
     return () => clearInterval(interval);
   }, []);
 
@@ -56,7 +56,8 @@ const Index = () => {
       <main className="relative z-10 p-6 max-w-7xl mx-auto">
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6">
           <div className="lg:col-span-2">
-            <ChatBot inline />
+            {/* Pass confusionLevel as a prop, converted to a decimal */}
+            <ChatBot confusion={confusionLevel / 100} />
           </div>
           <div className="lg:col-span-1">
             <ConfusionGraph confusionLevel={confusionLevel} />
