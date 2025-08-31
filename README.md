@@ -30,3 +30,136 @@ pip install -r ..requirements.txt
 python -m uvicorn main:app --reload
 ```
 Keep in mind that you need to restart the backend if you want the confusion value to reset from 0, otherwise it oscilliates around 80, which is higher than our threshold of 65.
+
+### Chrome Extension
+If you wish to use the Chrome extension, copy the following file contents into the same folder. Next, go to chrome://extensions -> Developer mode -> Load unpacked -> Select the folder with these there files
+
+#### background.js
+```
+// background.js
+console.log("[background] Service worker started");
+
+chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+  if (msg?.type !== "CAPTURE_VISIBLE_TAB") return false;
+
+  chrome.tabs.query({ active: true, lastFocusedWindow: true }, (tabs) => {
+    if (chrome.runtime.lastError) {
+      sendResponse({ ok: false, error: chrome.runtime.lastError.message });
+      return;
+    }
+
+    const tab = tabs[0];
+    if (!tab || tab.windowId == null) {
+      sendResponse({ ok: false, error: "No active tab/window" });
+      return;
+    }
+
+    // Ensure window is focused (some OSes block captures on unfocused windows)
+    chrome.windows.update(tab.windowId, { focused: true }, () => {
+      if (chrome.runtime.lastError) {
+        sendResponse({ ok: false, error: chrome.runtime.lastError.message });
+        return;
+      }
+
+      // Delay a bit after focus so the frame is fully painted
+      setTimeout(() => {
+        chrome.tabs.captureVisibleTab(
+          tab.windowId,
+          { format: "png", quality: 100 },
+          (dataUrl) => {
+            if (chrome.runtime.lastError) {
+              sendResponse({ ok: false, error: chrome.runtime.lastError.message });
+              return;
+            }
+            if (!dataUrl || !dataUrl.startsWith("data:image/png;base64,")) {
+              sendResponse({ ok: false, error: "Invalid or empty screenshot data" });
+              return;
+            }
+
+            const base64 = dataUrl.split(",")[1]; // strip prefix
+            sendResponse({ ok: true, base64 });
+          }
+        );
+      }, 500);
+    });
+  });
+
+  return true; // keep channel open for async sendResponse
+});
+```
+
+#### content.js
+```
+// content.js
+console.log("[content] Script loaded. Listening for messages from the page.");
+
+window.addEventListener("message", async (event) => {
+  if (!event.data || event.data.__from !== "APP") return;
+
+  const msg = event.data;
+
+  if (msg.type === "REQUEST_CAPTURE") {
+    console.log("[content] Message is a valid capture request. Forwarding to background script.");
+
+    chrome.runtime.sendMessage({ type: "CAPTURE_VISIBLE_TAB" }, (resp) => {
+      if (chrome.runtime.lastError) {
+        console.error("[content] Error from background:", chrome.runtime.lastError.message);
+        window.postMessage(
+          { __from: "EXT", type: "CAPTURE_RESULT", ok: false, error: chrome.runtime.lastError.message },
+          "*"
+        );
+        return;
+      }
+
+      console.log("[content] Got response from background script:", resp);
+
+      window.postMessage(
+        {
+          __from: "EXT",
+          type: "CAPTURE_RESULT",
+          ok: resp?.ok || false,
+          base64: resp?.base64 || null,
+          error: resp?.error || null,
+        },
+        "*"
+      );
+    });
+  }
+});
+```
+
+#### manifest.json
+```
+//manifest.json
+{
+  "manifest_version": 3,
+  "name": "Confusion Screenshot Bridge",
+  "version": "1.0.2",
+  "permissions": [
+    "tabs", 
+    "activeTab",
+    "storage",
+    "scripting"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "background": { 
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"],
+      "run_at": "document_end",
+      "all_frames": false
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["*"],
+      "matches": ["<all_urls>"]
+    }
+  ]
+}
+```
