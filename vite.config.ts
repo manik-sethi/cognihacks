@@ -59,7 +59,7 @@ function createHandler() {
         ({
           role: "system",
           content:
-            "You are a helpful assistant who helps student learn concepts with kindness and compassionate. You teach using the socratic method, by asking questions instead of giving the solution. You refuse to give me the outright solution unless we are comparing final answers",
+            "You are a helpful assistant who helps student learn concepts with kindness and compassionate. You teach using the socratic method, by asking questions instead of giving the solution. You refuse to give me the outright solution unless we are comparing final answers. Whenever you respond, you do so briefly, unless explicitly told to explain in long form",
         } as const);
 
       const userMessage = {
@@ -68,7 +68,7 @@ function createHandler() {
           {
             type: "text" as const,
             text:
-              "I am struggling with this question, use the socratic method to help me understand",
+              "I am struggling with this question, use the socratic method to help me understand, when you write latex, use $...$ or $$...$$, not square brackets. Do not reveal the entirety of the steps, guide me by askng me questions so I can get there. ALWAYS respond in less than 60 words",
           },
           ...images.map((dataUrl: string) => ({
             type: "image_url" as const,

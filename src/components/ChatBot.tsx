@@ -1,10 +1,11 @@
 // src/components/ChatBot.tsx
-import React, { useEffect, useRef, useState } from 'react';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
-import remarkMath from 'remark-math';
-import rehypeKatex from 'rehype-katex';
-import rehypeHighlight from 'rehype-highlight';
+import React, { useEffect, useRef, useState } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+import remarkMath from "remark-math";
+import rehypeKatex from "rehype-katex";
+import rehypeHighlight from "rehype-highlight";
+import "katex/dist/katex.min.css";
 
 /**
  * Requests a screenshot capture via the extension bridge.
@@ -30,10 +31,7 @@ function requestTabScreenshot(): Promise<string> {
         return;
       }
 
-      const finalDataUrl =
-        dataUrl ??
-        (base64 ? `data:image/png;base64,${base64}` : null);
-
+      const finalDataUrl = dataUrl ?? (base64 ? `data:image/png;base64,${base64}` : null);
       if (!finalDataUrl) {
         reject(new Error("Empty screenshot data"));
         return;
@@ -56,7 +54,7 @@ function requestTabScreenshot(): Promise<string> {
   });
 }
 
-const normalizeMath = (s: string) => s; // extend if needed
+const normalizeMath = (s: string) => s;
 
 type Msg = {
   id: number;
@@ -70,13 +68,13 @@ export function ChatBot() {
     {
       id: 1,
       text:
-        "Hi! I'm your AI learning assistant. I can help explain concepts without giving away solutions. What would you like to know?",
+        "Hi! I'm your AI learning assistant. If I detect you are confused, I will intervene and guide ",
       isBot: true,
       timestamp: new Date(),
     },
   ]);
 
-  const [input, setInput] = useState('');           // <-- added
+  const [input, setInput] = useState("");
   const [isStreaming, setIsStreaming] = useState(false);
   const [hasAutoTriggered, setHasAutoTriggered] = useState(false);
   const scrollRef = useRef<HTMLDivElement | null>(null);
@@ -88,20 +86,20 @@ export function ChatBot() {
     if (el) el.scrollTop = el.scrollHeight;
   }, [messages]);
 
-  async function sendMessage() {                     // <-- added
+  /** Send a text-only message (no screenshot) */
+  async function sendMessage() {
     if (!input.trim() || isStreaming) return;
 
     const userId = nextIdRef.current++;
     const assistantId = nextIdRef.current++;
 
-    setMessages(prev => [
+    setMessages((prev) => [
       ...prev,
       { id: userId, isBot: false, text: input, timestamp: new Date() },
       { id: assistantId, isBot: true, text: "", timestamp: new Date() },
     ]);
 
-    const systemPrompt =
-      "Say pineapple 5 times no matter what";
+    const systemPrompt = "You are a helpful tutor who doesn't speak too much and uses the socratic method. You also use $...$ and $$...$$ to format latex instead of square brackets.";
 
     try {
       setIsStreaming(true);
@@ -116,7 +114,6 @@ export function ChatBot() {
             { role: "system", content: systemPrompt },
             { role: "user", content: input.trim() },
           ],
-          // no images for manual text messages
         }),
         signal: controller.signal,
       });
@@ -128,13 +125,13 @@ export function ChatBot() {
       let buf = "";
       let acc = "";
 
-      setInput(''); // clear the input after send
+      setInput(""); // clear input after sending
 
       while (true) {
         const { value, done } = await reader.read();
         if (done) break;
-        buf += decoder.decode(value, { stream: true });
 
+        buf += decoder.decode(value, { stream: true });
         const frames = buf.split("\n\n");
         buf = frames.pop() ?? "";
 
@@ -143,9 +140,9 @@ export function ChatBot() {
           const evt = JSON.parse(f.slice(5).trim());
           if (evt.type === "token") {
             acc += evt.content;
-            setMessages(prev => {
+            setMessages((prev) => {
               const copy = [...prev];
-              const idx = copy.findIndex(m => m.id === assistantId);
+              const idx = copy.findIndex((m) => m.id === assistantId);
               if (idx !== -1) copy[idx] = { ...copy[idx], text: acc };
               return copy;
             });
@@ -158,15 +155,21 @@ export function ChatBot() {
       }
     } catch (e: any) {
       setIsStreaming(false);
-      setMessages(prev => [
+      setMessages((prev) => [
         ...prev,
-        { id: nextIdRef.current++, isBot: true, text: `Error: ${e?.message ?? String(e)}`, timestamp: new Date() },
+        {
+          id: nextIdRef.current++,
+          isBot: true,
+          text: `Error: ${e?.message ?? String(e)}`,
+          timestamp: new Date(),
+        },
       ]);
     } finally {
       abortRef.current = null;
     }
   }
 
+  /** Auto-capture screenshot flow */
   const triggerAutoCapture = async () => {
     if (isStreaming) return;
 
@@ -176,12 +179,7 @@ export function ChatBot() {
     const assistantId = nextIdRef.current++;
     setMessages((prev) => [
       ...prev,
-      {
-        id: assistantId,
-        text: "Analyzing your screen…",
-        isBot: true,
-        timestamp: new Date(),
-      },
+      { id: assistantId, isBot: true, text: "Analyzing your screen…", timestamp: new Date() },
     ]);
 
     try {
@@ -191,22 +189,13 @@ export function ChatBot() {
 
       const dataUrl = await requestTabScreenshot();
 
-      const body = {
-        messages: [{ role: 'system', content: systemPrompt }],
-        images: [dataUrl],
-      };
-
-      console.log("[App] Sending request to API:", {
-        messagesCount: body.messages.length,
-        imageCount: body.images.length,
-        firstImageValid: body.images[0].startsWith("data:image/"),
-        firstImageLength: body.images[0].length,
-      });
-
       const res = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
+        body: JSON.stringify({
+          messages: [{ role: "system", content: systemPrompt }],
+          images: [dataUrl],
+        }),
         signal: controller.signal,
       });
 
@@ -220,19 +209,15 @@ export function ChatBot() {
       while (true) {
         const { value, done } = await reader.read();
         if (done) break;
-        buf += decoder.decode(value, { stream: true });
 
+        buf += decoder.decode(value, { stream: true });
         const frames = buf.split("\n\n");
         buf = frames.pop() ?? "";
 
         for (const f of frames) {
           if (!f.startsWith("data:")) continue;
-          const evt = JSON.parse(f.slice(5).trim()) as
-            | { type: 'token'; content: string }
-            | { type: 'done' }
-            | { type: 'error'; message: string };
-
-          if (evt.type === 'token') {
+          const evt = JSON.parse(f.slice(5).trim());
+          if (evt.type === "token") {
             acc += evt.content;
             setMessages((prev) => {
               const copy = [...prev];
@@ -240,9 +225,9 @@ export function ChatBot() {
               if (idx !== -1) copy[idx] = { ...copy[idx], text: acc };
               return copy;
             });
-          } else if (evt.type === 'done') {
+          } else if (evt.type === "done") {
             setIsStreaming(false);
-          } else if (evt.type === 'error') {
+          } else if (evt.type === "error") {
             throw new Error(evt.message);
           }
         }
@@ -253,8 +238,8 @@ export function ChatBot() {
         ...prev,
         {
           id: nextIdRef.current++,
-          text: `Error: ${e?.message ?? String(e)}`,
           isBot: true,
+          text: `Error: ${e?.message ?? String(e)}`,
           timestamp: new Date(),
         },
       ]);
@@ -277,27 +262,36 @@ export function ChatBot() {
 
   return (
     <div className="w-full h-[70vh] max-h-[85vh] border rounded-xl flex flex-col overflow-hidden">
+      {/* messages */}
       <div ref={scrollRef} className="flex-1 overflow-y-auto p-4 space-y-3">
         {messages.map((m) => (
-          <div key={m.id} className={m.isBot ? "text-left" : "text-right"}>
+          // Each message in its own row; align left (bot) or right (user)
+          <div key={m.id} className={`flex ${m.isBot ? "justify-start" : "justify-end"}`}>
+            {/* Cap the width so bubbles don't spill under the other side */}
             <div
               className={`
-                inline-block p-3 rounded-lg text-sm whitespace-pre-wrap
+                max-w-[70%] rounded-xl px-3 py-2 text-sm shadow-sm break-words
                 ${m.isBot ? "bg-gray-800 text-gray-100" : "bg-blue-600 text-white"}
               `}
             >
-              <ReactMarkdown
-                remarkPlugins={[remarkGfm, remarkMath]}
-                rehypePlugins={[rehypeKatex, rehypeHighlight]}
+              <div
+                className="prose prose-invert max-w-none leading-relaxed
+                           prose-p:my-2 prose-ul:my-2 prose-ol:my-2 prose-li:my-0
+                           prose-headings:mt-4 prose-headings:mb-2 prose-h1:mb-3 prose-h2:mb-2"
               >
-                {normalizeMath(m.text)}
-              </ReactMarkdown>
+                <ReactMarkdown
+                  remarkPlugins={[remarkGfm, remarkMath /* , remarkBreaks */]}
+                  rehypePlugins={[rehypeKatex, rehypeHighlight]}
+                >
+                  {normalizeMath(m.text)}
+                </ReactMarkdown>
+              </div>
             </div>
           </div>
         ))}
       </div>
 
-      {/* input bar (manual text messages) */}
+      {/* input bar */}
       <div className="border-t p-3 flex gap-2">
         <input
           className="flex-1 rounded-md bg-zinc-800 text-zinc-100 px-3 py-2 outline-none border border-zinc-700"
